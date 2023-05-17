@@ -1,0 +1,23 @@
+apiVersion: v1 # Версия API
+kind: Pod # Объект, который создаем
+metadata:
+  name: nginx  # Название Pod
+  labels: # Метки в формате key: value
+    key: nginx
+spec:  # Описание Pod
+  containers: # Описание контейнеров внутри Pod
+  - name: nginx  # Название контейнера
+    image: dmikos4/web:testimg  # Образ из которого создается контейнер
+    volumeMounts: #У контейнера и у init контейнера должны быть описаны volumeMounts
+    - name: app
+      mountPath: /app
+  initContainers:
+  - name: init-web
+    image: busybox:latest
+    command: ['sh', '-c', 'wget -O- https://tinyurl.com/otus-k8s-intro | sh']
+    volumeMounts: #У контейнера и у init контейнера должны быть описаны volumeMounts
+    - name: app
+      mountPath: /app
+  volumes: #Для того, чтобы файлы, созданные в init контейнере, были доступны основному контейнеру в pod нам понадобится использовать volume типа emptyDir
+  - name: app
+    emptyDir: {}
