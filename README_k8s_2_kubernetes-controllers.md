@@ -85,6 +85,14 @@ frontend-x9w58   1/1     Running   0          5m21s
 ```
 
 Scaling
+
+Одна работающая реплика - это уже неплохо, но в реальной жизни, как
+правило, требуется создание нескольких инстансов одного и того же
+сервиса для:
+Повышения отказоустойчивости;
+Распределения нагрузки между репликами.
+
+to set/increase replicas by Ad-hoc cmd
 ```
 kubectl scale replicaset frontend --replicas=3
 
@@ -100,6 +108,9 @@ frontend   3         3         3       32m
 ```
 
 Check recovery of pods
+
+Проверим, что благодаря контроллеру pod’ы действительно
+восстанавливаются после их ручного удаления:
 
 ```shell
 kubectl delete pods -l app=frontend | kubectl get pods -l app=frontend -w
@@ -148,6 +159,9 @@ dmikos4/frontend:testing dmikos4/frontend:testing dmikos4/frontend:testingd
 
 
 ## Upgrade ReplicaSet
+
+Upgrade/rollout to new version of microservice
+
 ```shell
 git clone git@github.com:GoogleCloudPlatform/microservices-demo.git
 
@@ -177,6 +191,7 @@ dmikos4/frontend:testing
 kubectl get pods -l app=frontend -o=jsonpath='{.items[0:3].spec.containers[0].image}'ec.containers[0].image}'
 dmikos4/frontend:testing dmikos4/frontend:testing dmikos4/frontend:testing
 ```
+
 Delete all pods and check - but seems no changes (img still :testing)
 ```
  kubectl delete pods -l app=frontend | kubectl get pods -l app=frontend -w
@@ -231,7 +246,7 @@ frontend                    3         3         3       28h
 paymentservice-79d9669947   3         3         3       54s
 
 ```
-##Upgrade 
+## Upgrade 
 
 image version: dmikos4/paymentservice:v0.0.1 -> v0.0.2
 
