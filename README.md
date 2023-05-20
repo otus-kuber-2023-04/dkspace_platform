@@ -25,7 +25,7 @@ for the reference : https://www.docker.com/blog/how-to-use-the-official-nginx-do
  docker push dmikos4/web:testing
 ```
 
-###Check the result and launch docker
+### Check the result and launch docker
 
 Install kubectl
 https://kubernetes.io/ru/docs/reference/kubectl/cheatsheet/#kubectl-autocomplete
@@ -74,7 +74,7 @@ kubectl get rs --all-namespaces
 
 ```
 
-##Prepare kubernetesintro/web-pod.yaml and start/apply
+## Prepare kubernetesintro/web-pod.yaml and start/apply
 
 ```shell
 kubectl apply -f web-pod.yaml
@@ -83,7 +83,7 @@ kubectl get pods
 NAME READY STATUS RESTARTS AGE
 web 1/1 Running 0 42s
 ```
-###Check yaml of running pod
+### Check yaml of running pod
 
 ```
 kubectl get pod web -o yaml
@@ -94,7 +94,7 @@ kubectl describe
 kubectl describe pod web
 ```
 
-###Make Init Container
+### Make Init Container
 
 To allow files of Init docker avilable https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
 from regular docker add vlume to both of them
@@ -121,7 +121,7 @@ nginx   0/1     Init:0/1   0          7s
 nginx   0/1     PodInitializing   0          20s
 nginx   1/1     Running           0          21s
 ```
-###Application check
+### Application check
 
 
 ```shell
@@ -132,13 +132,15 @@ Forwarding from 0.0.0.0:8000 -> 8000
 in browser http://localhost:8000/index.html
 
 
-##Frontend microservice from Hipster Shop app
+## Frontend microservice from Hipster Shop app
 https://github.com/GoogleCloudPlatform/microservices-demo
 
 https://github.com/GoogleCloudPlatform/microservices-demo/tree/main/src/frontend
 
 ```shell
-https://github.com/GoogleCloudPlatform/microservices-demo.git
+#https://github.com/GoogleCloudPlatform/microservices-demo.git
+
+git clone git@github.com:GoogleCloudPlatform/microservices-demo.git
 cd /microservices-demo/src/frontend
 docker build --rm -t dmikos4/frontend:testing .
 
@@ -146,7 +148,7 @@ docker push dmikos4/frontend:testing
 The push refers to repository [docker.io/dmikos4/frontend]
 ```
 
-###Ad-hoc mode to deploy Pod
+### Ad-hoc mode to deploy Pod
 https://kubernetes.io/docs/reference/kubectl/conventions/
 ```shell
 kubectl run frontend --image dmikos4/frontend:testing --restart=Never
