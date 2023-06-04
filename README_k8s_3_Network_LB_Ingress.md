@@ -454,6 +454,696 @@ ipvs:
 
 ```
 Удалим Pod с kube-proxy , чтобы применить новую конфигурацию (он входит в DaemonSet и будет запущен автоматически)
+```
+kubectl --namespace kube-system delete pod --selector='k8s-app=kube-proxy'
+```
 Описание работы и настройки . Причины включения strictARP описаны https://github.com/metallb/metallb/issues/153
 
+```
+ kubectl get pods --all-namespaces
+NAMESPACE              NAME                                        READY   STATUS    RESTARTS      AGE
+...
+...
+kube-system            kube-proxy-6trlp                            1/1     Running   0             12m
+...
+...
 
+```
+Включение IPVS
+После успешного рестарта kube-proxy выполним команду
+minikube ssh и проверим, что получилось
+Выполним команду iptables --list -nv -t nat в ВМ Minikube
+Что-то поменялось, но старые цепочки на месте (хотя у них теперь 0
+references) 
+kube-proxy настроил все по-новому, но не удалил мусор
+Запуск kube-proxy --cleanup в нужном поде - тоже не
+помогает
+kubectl --namespace kube-system exec kube-proxy-<POD> kube-proxy --
+cleanup
+
+
+```
+minikube ssh
+Last login: Sun Jun  4 01:37:12 2023 from 10.1.1.129
+docker@minikube:~$ sudo -i
+root@minikube:~# iptables --list -nv -t nat
+Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+   56  3960 KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */
+    3   252 DOCKER_OUTPUT  all  --  *      *       0.0.0.0/0            10.1.1.129          
+   27  1620 DOCKER     all  --  *      *       0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain POSTROUTING (policy ACCEPT 1579 packets, 97031 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+ 1606 99196 KUBE-POSTROUTING  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes postrouting rules */
+    0     0 MASQUERADE  all  --  *      !docker0  172.17.0.0/16        0.0.0.0/0           
+    0     0 DOCKER_POSTROUTING  all  --  *      *       0.0.0.0/0            10.1.1.129          
+    1    60 CNI-1d638a3757f65620aa54e5ab  all  --  *      *       10.244.0.12          0.0.0.0/0            /* name: "bridge" id: "9c10a3e0af22879e5daf5d6390af7fd6b4ae7790a634565a2fc6d3cc3864a498" */
+   12   896 CNI-2a6da5bf36b611dc40b84772  all  --  *      *       10.244.0.13          0.0.0.0/0            /* name: "bridge" id: "b43d98ef794dd3e9c0c6605c889c747adad2501bc55800cdf3576f1db1f6c9b6" */
+    1    60 CNI-83fdd3c8874300c87c61e568  all  --  *      *       10.244.0.14          0.0.0.0/0            /* name: "bridge" id: "a5eb9062867ca20aa936ac00ac4fa0d1f9c649995aa8a1e9bdac44b47cc79375" */
+    0     0 CNI-879f5a730ae67d7b020a7cda  all  --  *      *       10.244.0.15          0.0.0.0/0            /* name: "bridge" id: "783e99944c92fd24a257e91c2a005ebfc59c5cb06978052c1dc88f4a07f5a85c" */
+   12   896 CNI-750f63cb446d8bf62da66764  all  --  *      *       10.244.0.17          0.0.0.0/0            /* name: "bridge" id: "3e9f46cfb2818c5896725bd4734d59144275e28b65f3753484d6a0675324a9c5" */
+   12   896 CNI-0fed1596971cac581d9a42be  all  --  *      *       10.244.0.16          0.0.0.0/0            /* name: "bridge" id: "d6e2ac9861db5e69b076cfded43a498026ca6611eb5582847754a2c45a42491f" */
+
+Chain OUTPUT (policy ACCEPT 1520 packets, 92414 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+ 1386 85372 KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */
+   59  4617 DOCKER_OUTPUT  all  --  *      *       0.0.0.0/0            10.1.1.129          
+  641 38460 DOCKER     all  --  *      *       0.0.0.0/0           !127.0.0.0/8          ADDRTYPE match dst-type LOCAL
+
+Chain DOCKER_OUTPUT (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            10.1.1.129           tcp dpt:53 to:127.0.0.11:39959
+   62  4869 DNAT       udp  --  *      *       0.0.0.0/0            10.1.1.129           udp dpt:53 to:127.0.0.11:40198
+
+Chain DOCKER_POSTROUTING (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 SNAT       tcp  --  *      *       127.0.0.11           0.0.0.0/0            tcp spt:39959 to:10.1.1.129:53
+    0     0 SNAT       udp  --  *      *       127.0.0.11           0.0.0.0/0            udp spt:40198 to:10.1.1.129:53
+
+Chain DOCKER (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 RETURN     all  --  docker0 *       0.0.0.0/0            0.0.0.0/0           
+
+Chain KUBE-MARK-DROP (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 MARK       all  --  *      *       0.0.0.0/0            0.0.0.0/0            MARK or 0x8000
+
+Chain KUBE-MARK-MASQ (18 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 MARK       all  --  *      *       0.0.0.0/0            0.0.0.0/0            MARK or 0x4000
+
+Chain KUBE-POSTROUTING (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 MASQUERADE  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* Kubernetes endpoints dst ip:port, source ip for solving hairpin purpose */ match-set KUBE-LOOP-BACK dst,dst,src
+   22  1320 RETURN     all  --  *      *       0.0.0.0/0            0.0.0.0/0            mark match ! 0x4000/0x4000
+    0     0 MARK       all  --  *      *       0.0.0.0/0            0.0.0.0/0            MARK xor 0x4000
+    0     0 MASQUERADE  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service traffic requiring SNAT */ random-fully
+
+Chain KUBE-KUBELET-CANARY (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain CNI-1d638a3757f65620aa54e5ab (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            10.244.0.0/16        /* name: "bridge" id: "9c10a3e0af22879e5daf5d6390af7fd6b4ae7790a634565a2fc6d3cc3864a498" */
+    1    60 MASQUERADE  all  --  *      *       0.0.0.0/0           !224.0.0.0/4          /* name: "bridge" id: "9c10a3e0af22879e5daf5d6390af7fd6b4ae7790a634565a2fc6d3cc3864a498" */
+
+Chain CNI-2a6da5bf36b611dc40b84772 (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+   10   776 ACCEPT     all  --  *      *       0.0.0.0/0            10.244.0.0/16        /* name: "bridge" id: "b43d98ef794dd3e9c0c6605c889c747adad2501bc55800cdf3576f1db1f6c9b6" */
+    2   120 MASQUERADE  all  --  *      *       0.0.0.0/0           !224.0.0.0/4          /* name: "bridge" id: "b43d98ef794dd3e9c0c6605c889c747adad2501bc55800cdf3576f1db1f6c9b6" */
+
+Chain CNI-83fdd3c8874300c87c61e568 (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            10.244.0.0/16        /* name: "bridge" id: "a5eb9062867ca20aa936ac00ac4fa0d1f9c649995aa8a1e9bdac44b47cc79375" */
+    1    60 MASQUERADE  all  --  *      *       0.0.0.0/0           !224.0.0.0/4          /* name: "bridge" id: "a5eb9062867ca20aa936ac00ac4fa0d1f9c649995aa8a1e9bdac44b47cc79375" */
+
+Chain CNI-879f5a730ae67d7b020a7cda (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            10.244.0.0/16        /* name: "bridge" id: "783e99944c92fd24a257e91c2a005ebfc59c5cb06978052c1dc88f4a07f5a85c" */
+    0     0 MASQUERADE  all  --  *      *       0.0.0.0/0           !224.0.0.0/4          /* name: "bridge" id: "783e99944c92fd24a257e91c2a005ebfc59c5cb06978052c1dc88f4a07f5a85c" */
+
+Chain CNI-0fed1596971cac581d9a42be (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+   10   776 ACCEPT     all  --  *      *       0.0.0.0/0            10.244.0.0/16        /* name: "bridge" id: "d6e2ac9861db5e69b076cfded43a498026ca6611eb5582847754a2c45a42491f" */
+    2   120 MASQUERADE  all  --  *      *       0.0.0.0/0           !224.0.0.0/4          /* name: "bridge" id: "d6e2ac9861db5e69b076cfded43a498026ca6611eb5582847754a2c45a42491f" */
+
+Chain CNI-750f63cb446d8bf62da66764 (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+   10   776 ACCEPT     all  --  *      *       0.0.0.0/0            10.244.0.0/16        /* name: "bridge" id: "3e9f46cfb2818c5896725bd4734d59144275e28b65f3753484d6a0675324a9c5" */
+    2   120 MASQUERADE  all  --  *      *       0.0.0.0/0           !224.0.0.0/4          /* name: "bridge" id: "3e9f46cfb2818c5896725bd4734d59144275e28b65f3753484d6a0675324a9c5" */
+
+Chain KUBE-PROXY-CANARY (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain KUBE-SERVICES (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    5   300 RETURN     all  --  *      *       127.0.0.0            0.0.0.0/0           
+    0     0 KUBE-MARK-MASQ  all  --  *      *      !10.244.0.0           0.0.0.0/0            /* Kubernetes service cluster ip + port for masquerade purpose */ match-set KUBE-CLUSTER-IP dst,dst
+    7   420 KUBE-NODE-PORT  all  --  *      *       0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            match-set KUBE-CLUSTER-IP dst,dst
+
+Chain KUBE-NODEPORTS (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain KUBE-SVC-Z6GDYMWE5TV2NNJN (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *      !10.244.0.0           10.103.128.69        /* kubernetes-dashboard/dashboard-metrics-scraper cluster IP */ tcp dpt:8000
+    0     0 KUBE-SEP-K7L7QARSOVKMIWWO  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes-dashboard/dashboard-metrics-scraper -> 10.244.0.15:8000 */
+
+Chain KUBE-SVC-NPX46M4PTMTKRN6Y (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *      !10.244.0.0           10.96.0.1            /* default/kubernetes:https cluster IP */ tcp dpt:443
+    0     0 KUBE-SEP-XGHPBZQ6OE7MORHG  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/kubernetes:https -> 10.1.1.130:8443 */
+
+Chain KUBE-SEP-XGHPBZQ6OE7MORHG (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.1.1.130           0.0.0.0/0            /* default/kubernetes:https */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/kubernetes:https */ tcp to:10.1.1.130:8443
+
+Chain KUBE-SEP-K7L7QARSOVKMIWWO (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.15          0.0.0.0/0            /* kubernetes-dashboard/dashboard-metrics-scraper */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes-dashboard/dashboard-metrics-scraper */ tcp to:10.244.0.15:8000
+
+Chain KUBE-SVC-ERIFXISQEP7F7OF4 (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *      !10.244.0.0           10.96.0.10           /* kube-system/kube-dns:dns-tcp cluster IP */ tcp dpt:53
+    0     0 KUBE-SEP-T62R2ZCQJ7L2XKT3  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kube-system/kube-dns:dns-tcp -> 10.244.0.12:53 */
+
+Chain KUBE-SEP-T62R2ZCQJ7L2XKT3 (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.12          0.0.0.0/0            /* kube-system/kube-dns:dns-tcp */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kube-system/kube-dns:dns-tcp */ tcp to:10.244.0.12:53
+
+Chain KUBE-SVC-JD5MR3NA4I4DYORP (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *      !10.244.0.0           10.96.0.10           /* kube-system/kube-dns:metrics cluster IP */ tcp dpt:9153
+    0     0 KUBE-SEP-TGXK4KBOH5HJRS4R  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kube-system/kube-dns:metrics -> 10.244.0.12:9153 */
+
+Chain KUBE-SEP-TGXK4KBOH5HJRS4R (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.12          0.0.0.0/0            /* kube-system/kube-dns:metrics */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kube-system/kube-dns:metrics */ tcp to:10.244.0.12:9153
+
+Chain KUBE-SVC-TCOU7JCQXEZGVUNU (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  udp  --  *      *      !10.244.0.0           10.96.0.10           /* kube-system/kube-dns:dns cluster IP */ udp dpt:53
+    0     0 KUBE-SEP-LSIUSH75GR7U3TUR  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kube-system/kube-dns:dns -> 10.244.0.12:53 */
+
+Chain KUBE-SEP-LSIUSH75GR7U3TUR (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.12          0.0.0.0/0            /* kube-system/kube-dns:dns */
+    0     0 DNAT       udp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kube-system/kube-dns:dns */ udp to:10.244.0.12:53
+
+Chain KUBE-SVC-CEZPIJSAUFW5MYPQ (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *      !10.244.0.0           10.96.168.54         /* kubernetes-dashboard/kubernetes-dashboard cluster IP */ tcp dpt:80
+    0     0 KUBE-SEP-RH2CVPYJBJBNUPVX  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes-dashboard/kubernetes-dashboard -> 10.244.0.14:9090 */
+
+Chain KUBE-SEP-RH2CVPYJBJBNUPVX (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.14          0.0.0.0/0            /* kubernetes-dashboard/kubernetes-dashboard */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes-dashboard/kubernetes-dashboard */ tcp to:10.244.0.14:9090
+
+Chain KUBE-SVC-6CZTMAROCN3AQODZ (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  tcp  --  *      *      !10.244.0.0           10.100.119.150       /* default/web-svc-cip cluster IP */ tcp dpt:80
+    0     0 KUBE-SEP-R4XSX25ZM4W6VXLE  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web-svc-cip -> 10.244.0.13:8000 */ statistic mode random probability 0.33333333349
+    0     0 KUBE-SEP-I6DOMSWWKJXSSIVG  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web-svc-cip -> 10.244.0.16:8000 */ statistic mode random probability 0.50000000000
+    0     0 KUBE-SEP-QILNNAXKGXZVFE4L  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web-svc-cip -> 10.244.0.17:8000 */
+
+Chain KUBE-SEP-R4XSX25ZM4W6VXLE (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.13          0.0.0.0/0            /* default/web-svc-cip */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web-svc-cip */ tcp to:10.244.0.13:8000
+
+Chain KUBE-SEP-I6DOMSWWKJXSSIVG (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.16          0.0.0.0/0            /* default/web-svc-cip */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web-svc-cip */ tcp to:10.244.0.16:8000
+
+Chain KUBE-SEP-QILNNAXKGXZVFE4L (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       10.244.0.17          0.0.0.0/0            /* default/web-svc-cip */
+    0     0 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            /* default/web-svc-cip */ tcp to:10.244.0.17:8000
+
+Chain KUBE-NODE-PORT (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain KUBE-LOAD-BALANCER (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       0.0.0.0/0            0.0.0.0/0 
+```
+
+#### Полностью очистим все правила iptables :
+
+```
+sudo -i
+root@minikube:~$ cd /tmp/
+root@minikube:/tmp$ touch iptables.cleanup
+root@minikube:/tmp$ vi iptables.cleanup 
+*nat
+-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE
+COMMIT
+*filter
+COMMIT
+*mangle
+COMMIT
+root@minikube:/tmp$ 
+root@minikube:/tmp$ iptables-restore iptables.cleanup
+```
+Теперь надо подождать (примерно 30 секунд), пока kube-proxy восстановит правила для сервисов
+Проверим результат : `iptables --list -nv -t nat`
+
+```
+docker@minikube:/tmp$ sudo su -
+root@minikube:~# iptables --list -nv -t nat
+Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */
+
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain POSTROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+   35  2100 KUBE-POSTROUTING  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes postrouting rules */
+    0     0 MASQUERADE  all  --  *      !docker0  172.17.0.0/16        0.0.0.0/0           
+
+Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+   35  2100 KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */
+
+Chain KUBE-SERVICES (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    4   240 RETURN     all  --  *      *       127.0.0.0            0.0.0.0/0           
+    0     0 KUBE-MARK-MASQ  all  --  *      *      !10.244.0.0           0.0.0.0/0            /* Kubernetes service cluster ip + port for masquerade purpose */ match-set KUBE-CLUSTER-IP dst,dst
+   14   840 KUBE-NODE-PORT  all  --  *      *       0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+    0     0 ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            match-set KUBE-CLUSTER-IP dst,dst
+
+Chain KUBE-POSTROUTING (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 MASQUERADE  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* Kubernetes endpoints dst ip:port, source ip for solving hairpin purpose */ match-set KUBE-LOOP-BACK dst,dst,src
+   34  2040 RETURN     all  --  *      *       0.0.0.0/0            0.0.0.0/0            mark match ! 0x4000/0x4000
+    0     0 MARK       all  --  *      *       0.0.0.0/0            0.0.0.0/0            MARK xor 0x4000
+    0     0 MASQUERADE  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service traffic requiring SNAT */ random-fully
+
+Chain KUBE-NODE-PORT (1 references)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain KUBE-LOAD-BALANCER (0 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 KUBE-MARK-MASQ  all  --  *      *       0.0.0.0/0            0.0.0.0/0           
+
+Chain KUBE-MARK-MASQ (2 references)
+ pkts bytes target     prot opt in     out     source               destination         
+    0     0 MARK       all  --  *      *       0.0.0.0/0            0.0.0.0/0            MARK or 0x4000
+```
+Итак, лишние правила удалены и мы видим только актуальную конфигурацию
+kube-proxy периодически делает полную синхронизацию правил в своих цепочках)
+
+Как посмотреть конфигурацию IPVS? Ведь в ВМ нет утилиты ipvsadm ?
+В ВМ выполним команду toolbox - в результате мы окажется в контейнере с Fedora
+Теперь установим ipvsadm : `dnf install -y ipvsadm && dnf clean all`
+
+
+```
+root@minikube:~# ip addr show kube-ipvs0
+7: kube-ipvs0: <BROADCAST,NOARP> mtu 1500 qdisc noop state DOWN group default
+    link/ether ce:1b:b3:43:fb:20 brd ff:ff:ff:ff:ff:ff
+    inet 10.96.0.10/32 scope global kube-ipvs0
+       valid_lft forever preferred_lft forever
+    inet 10.103.128.69/32 scope global kube-ipvs0
+       valid_lft forever preferred_lft forever
+    inet 10.96.168.54/32 scope global kube-ipvs0
+       valid_lft forever preferred_lft forever
+    inet 10.96.0.1/32 scope global kube-ipvs0
+       valid_lft forever preferred_lft forever
+    inet 10.100.119.150/32 scope global kube-ipvs0
+       valid_lft forever preferred_lft forever
+root@minikube:~#
+
+```
+Выполним ipvsadm --list -n и среди прочих сервисов найдем
+наш:
+Теперь выйдем из контейнера toolbox и сделаем ping
+кластерного IP:
+$ ipvsadm --list -n
+TCP 10.106.18.171:80 rr
+-> 172.17.0.11:8000 Masq 1 0 0
+-> 172.17.0.12:8000 Masq 1 0 0
+-> 172.17.0.13:8000 Masq 1 0 0
+$ ping -c1 10.106.18.171
+PING 10.106.18.171 (10.106.18.171): 56 data bytes
+64 bytes from 10.106.18.171: seq=0 ttl=64 time=0.277 ms
+--- 10.106.18.171 ping statistics ---
+1 packets transmitted, 1 packets received, 0% packet loss
+round-trip min/avg/max = 0.227/0.227/0.277 ms
+Итак, все работает. Но почему пингуется виртуальный IP?
+Все просто - он уже не такой виртуальный. Этот IP теперь есть на
+интерфейсе kube-ipvs0 :
+Также, правила в iptables построены по-другому. Вместо
+цепочки правил для каждого сервиса, теперь используются хэш-
+таблицы (ipset). Можете посмотреть их, установив утилиту ipset в
+toolbox .
+
+# LoadBalancer и Ingress
+
+## Installation MetalLB
+
+MetalLB позволяет запустить внутри кластера L4-балансировщик,который будет принимать извне запросы к сервисам и раскидывать их между подами. Установка его проста:
+```
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.3/manifests/namespace.yaml
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.3/manifests/metallb.yaml
+kubectl create secret generic -n metallb-system memberlist --fromliteral=secretkey="$(openssl rand -base64 128)"
+```
+
+В продуктиве так делать не надо. Сначала стоит скачать файл и
+разобраться, что там внутри
+
+
+```
+ kubectl --namespace metallb-system get all
+NAME                              READY   STATUS             RESTARTS   AGE
+pod/controller-5759df545c-p77mh   0/1     ImagePullBackOff   0          114s
+pod/speaker-9hvjj                 0/1     ImagePullBackOff   0          114s
+
+NAME                     DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR                 AGE
+daemonset.apps/speaker   1         1         0       1            0           beta.kubernetes.io/os=linux   114s
+
+NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/controller   0/1     1            0           114s
+
+NAME                                    DESIRED   CURRENT   READY   AGE
+replicaset.apps/controller-5759df545c   1         1         0       114s
+dmik@nmslab:~$
+
+```
+
+Теперь настроим балансировщик с помощью ConfigMap
+
+metallb-config.yaml
+```
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: metallb-system
+  name: config
+data:
+  config: |
+    address-pools:
+    - name: default
+      protocol: layer2
+      addresses:
+      - 172.17.255.1-172.17.255.255
+
+```
+В конфигурации мы настраиваем:
+Режим L2 (анонс адресов балансировщиков с помощью ARP)
+Создаем пул адресов 172.17.255.1 - 172.17.255.255 - они будут
+назначаться сервисам с типом LoadBalancer
+```
+ kubectl apply -f metallb-config.yaml
+configmap/config created
+```
+
+### MetalLB -Проверка конфигурации
+cp web-svc-cip.yaml web-svc-lb.yaml и
+откройте его в редакторе.
+Измените имя сервиса и его тип на LoadBalancer
+```
+cat web-svc-lb.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-svc-lb
+spec:
+  selector:
+    app: web
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+
+```
+
+```
+kubectl apply -f web-svc-lb.yaml
+service/web-svc-lb created
+```
+
+Теперь посмотрите логи пода-контроллера MetalLB (подставьте
+правильное имя!)
+
+`kubectl --namespace metallb-system logs pod/controller-5759df545c`
+
+Обратите внимание на назначенный IP-адрес 
+(или посмотрите его в выводе `kubectl describe svc web-svc-lb` )
+
+```
+kubectl describe svc web-svc-lb
+Name:                     web-svc-lb
+Namespace:                default
+Labels:                   <none>
+Annotations:              <none>
+Selector:                 app=web
+Type:                     LoadBalancer
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.106.206.86
+IPs:                      10.106.206.86
+Port:                     <unset>  80/TCP
+TargetPort:               8000/TCP
+NodePort:                 <unset>  30156/TCP
+Endpoints:                10.244.0.18:8000,10.244.0.19:8000,10.244.0.21:8000
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Events:                   <none>
+
+```
+Если мы попробуем открыть URL
+http://<our_LB_address>/index.html , то... ничего не выйдет.
+Это потому, что сеть кластера изолирована от нашей основной ОС (а ОС
+не знает ничего о подсети для балансировщиков)
+Чтобы это поправить, добавим статический маршрут
+В реальном окружении это решается добавлением нужной подсети
+на интерфейс сетевого оборудования
+Или использованием L3-режима (что потребует усилий от
+сетевиков, но более предпочтительно)
+
+Найдите IP-адрес виртуалки с Minikube. Например так:
+```
+minikube ssh
+Last login: Sun Jun  4 02:43:04 2023 from 10.1.1.129
+docker@minikube:~$ ip addr show eth0
+9: eth0@if10: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default
+    link/ether 02:42:0a:01:01:82 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 10.1.1.130/25 brd 10.1.1.255 scope global eth0
+
+```
+или
+```
+ minikube ip
+10.1.1.130
+```
+
+MetalLB | Проверка конфигурации
+Если пообновлять страничку с помощью Ctrl-F5 (т.е. игнорируя кэш),
+то будет видно, что каждый наш запрос приходит на другой под. Причем,
+порядок смены подов - всегда один и тот же.
+Так работает IPVS - по умолчанию он использует rr (Round-Robin)
+балансировку.
+К сожалению, выбрать алгоритм на уровне манифеста сервиса нельзя.
+К сожалению, выбрать алгоритм на уровне манифеста сервиса нельзя.
+Но когда-нибудь, эта полезная фича https://kubernetes.io/blog/2018/07/09/ipvs-based-in-cluster-load-balancing-deep-dive/ появится 
+Доступные алгоритмы балансировки описаны здесь и здесь
+https://github.com/kubernetes/kubernetes/blob/1cb3b5807ec37490b4582f22d991c043cc468195/pkg/proxy/apis/config/types.go#L185
+http://www.linuxvirtualserver.org/docs/scheduling.html
+
+
+### Задание со ⭐️  DNS через MetalLB
+Сделайте сервис LoadBalancer , который откроет доступ к CoreDNS
+снаружи кластера (позволит получать записи через внешний IP).
+Например, nslookup web.default.cluster.local 172.17.255.10 .
+Поскольку DNS работает по TCP и UDP протоколам - учтите это в
+конфигурации. Оба протокола должны работать по одному и тому же IP-
+адресу балансировщика.
+Полученные манифесты положите в подкаталог ./coredns
+https://metallb.universe.tf/usage/
+
+## Создание Ingress
+
+Теперь, когда у нас есть балансировщик, можно заняться Ingress-
+контроллером и прокси:
+неудобно, когда на каждый Web-сервис надо выделять свой IP-адрес
+а еще хочется балансировку по HTTP-заголовкам (sticky sessions)
+Для нашего домашнего задания возьмем почти "коробочный" ingressnginx
+от проекта Kubernetes. Это "достаточно хороший" Ingress для
+умеренных нагрузок, основанный на OpenResty и пачке Lua-скриптов.
+
+Install
+```
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/deploy/static/provider/baremetal/deploy.yaml
+```
+
+После установки основных компонентов, в инструкции рекомендуется https://kubernetes.github.io/ingress-nginx/deploy/#bare-metal
+применить манифест, который создаст NodePort -сервис. Но у нас есть
+MetalLB, мы можем сделать круче.
+
+Можно сделать просто `minikube addons enable ingress` , но мы
+не ищем легких путей - Создадим файл nginx-lb.yaml c конфигурацией LoadBalancer -
+сервиса (работаем в каталоге kubernetes-networks ):
+
+```
+kind: Service
+apiVersion: v1
+metadata:
+name: ingress-nginx
+namespace: ingress-nginx
+labels:
+app.kubernetes.io/name: ingress-nginx
+app.kubernetes.io/component: controller
+spec:
+externalTrafficPolicy: Local
+type: LoadBalancer
+selector:
+app.kubernetes.io/name: ingress-nginx
+app.kubernetes.io/component: controller
+ports:
+- { name: http, port: 80, targetPort: http }
+- { name: https, port: 443, targetPort: https }
+```
+
+Теперь применим созданный манифест и посмотрим на IP-адрес,
+назначенный ему MetalLB
+Теперь можно сделать пинг на этот IP-адрес и даже curl
+Если видим страничку 404 от OpenResty (или Nginx) - значит работает!
+
+
+```
+kubectl apply -f nginx-lb.yaml
+service/ingress-nginx created
+
+kubectl get svc
+NAME          TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
+kubernetes    ClusterIP      10.96.0.1        <none>        443/TCP        4h19m
+web-svc-cip   ClusterIP      10.100.119.150   <none>        80/TCP         153m
+web-svc-lb    LoadBalancer   10.106.206.86    <pending>     80:30156/TCP   48m
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ minikube service list
+|----------------------|------------------------------------|--------------|-------------------------|
+|      NAMESPACE       |                NAME                | TARGET PORT  |           URL           |
+|----------------------|------------------------------------|--------------|-------------------------|
+| default              | kubernetes                         | No node port |                         |
+| default              | web-svc-cip                        | No node port |                         |
+| default              | web-svc-lb                         |           80 | http://10.1.1.130:30156 |
+| ingress-nginx        | ingress-nginx                      | http/80      | http://10.1.1.130:31545 |
+|                      |                                    | https/443    | http://10.1.1.130:31561 |
+| ingress-nginx        | ingress-nginx-controller           | http/80      | http://10.1.1.130:32189 |
+|                      |                                    | https/443    | http://10.1.1.130:30852 |
+| ingress-nginx        | ingress-nginx-controller-admission | No node port |                         |
+| kube-system          | kube-dns                           | No node port |                         |
+| kubernetes-dashboard | dashboard-metrics-scraper          | No node port |                         |
+| kubernetes-dashboard | kubernetes-dashboard               | No node port |                         |
+|----------------------|------------------------------------|--------------|-------------------------|
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$
+
+```
+
+### Connect Web application
+
+Наш Ingress-контроллер не требует ClusterIP для балансировки
+трафика
+Список узлов для балансировки заполняется из ресурса Endpoints
+нужного сервиса (это нужно для "интеллектуальной" балансировки,
+привязки сессий и т.п.)
+Поэтому мы можем использовать headless-сервис для нашего веб-
+приложения.
+Скопируйте web-svc-cip.yaml в web-svc-headless.yaml
+измените имя сервиса на web-svc
+добавьте параметр clusterIP: None
+
+```
+cat web-svc-headless.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-svc
+spec:
+  selector:
+    app: web
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+
+
+kubectl apply -f web-svc-headless.yaml
+service/web-svc created
+```
+Теперь примените полученный манифест и проверьте, что ClusterIP
+для сервиса web-svc действительно не назначен
+```
+ minikube service list
+|----------------------|------------------------------------|--------------|-------------------------|
+|      NAMESPACE       |                NAME                | TARGET PORT  |           URL           |
+|----------------------|------------------------------------|--------------|-------------------------|
+| default              | kubernetes                         | No node port |                         |
+| default              | web-svc                            | No node port |                         |
+| default              | web-svc-cip                        | No node port |                         |
+| default              | web-svc-lb                         |           80 | http://10.1.1.130:30156 |
+| ingress-nginx        | ingress-nginx                      | http/80      | http://10.1.1.130:31545 |
+|                      |                                    | https/443    | http://10.1.1.130:31561 |
+| ingress-nginx        | ingress-nginx-controller           | http/80      | http://10.1.1.130:32189 |
+|                      |                                    | https/443    | http://10.1.1.130:30852 |
+| ingress-nginx        | ingress-nginx-controller-admission | No node port |                         |
+| kube-system          | kube-dns                           | No node port |                         |
+| kubernetes-dashboard | dashboard-metrics-scraper          | No node port |                         |
+| kubernetes-dashboard | kubernetes-dashboard               | No node port |                         |
+|----------------------|------------------------------------|--------------|-------------------------|
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ kubectl get svc
+NAME          TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
+kubernetes    ClusterIP      10.96.0.1        <none>        443/TCP        4h27m
+web-svc       ClusterIP      None             <none>        80/TCP         57s
+web-svc-cip   ClusterIP      10.100.119.150   <none>        80/TCP         161m
+web-svc-lb    LoadBalancer   10.106.206.86    <pending>     80:30156/TCP   56m
+```
+
+### Ingress Rules
+
+Теперь настроим наш ingress-прокси, создав манифест с ресурсом
+Ingress (файл назовите web-ingress.yaml ):
+
+```
+cat web-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /web
+        backend:
+          serviceName: web-svc
+          servicePort: 8000
+```
+
+```
+kubectl apply -f web-ingress.yaml
+Error from server (BadRequest): error when creating "web-ingress.yaml": Ingress in version "v1" cannot be handled as a Ingress: strict decoding error: unknown field "spec.rules[0].http.paths[0].backend.serviceName", unknown field "spec.rules[0].http.paths[0].backend.servicePort"
+```
+
+Примените манифест и проверьте, что корректно заполнены Address и Backends
+```
+kubectl describe ingress/web
+```
+
+Теперь можно проверить, что страничка доступна в браузере
+( http://<LB_IP>/web/index.html )
+Обратите внимание, что обращения к странице тоже балансируются
+между Podами. Только сейчас это происходит средствами nginx, а не IPVS
+
+## Задания со ⭐️ Ingress для Dashboard
+Добавьте доступ к kubernetes-dashboard через наш Ingress-прокси:
+Cервис должен быть доступен через префикс /dashboard ).
+Kubernetes Dashboard должен быть развернут из официального
+манифеста. Актуальная ссылка есть тут https://github.com/kubernetes/dashboard
+Написанные вами манифесты положите в подкаталог ./dashboard
+
+## Задания со ⭐️  Canary для Ingress
+Реализуйте канареечное развертывание с помощью ingress-nginx :
+Перенаправление части трафика на выделенную группу подов должно
+происходить по HTTP-заголовку.
+Документация https://github.com/kubernetes/ingress-nginx/blob/main/docs/user-guide/nginx-configuration/annotations.md#canary
+Естественно, что вам понадобятся 1-2 "канареечных" пода.
+Написанные манифесты положите в подкаталог ./canary
