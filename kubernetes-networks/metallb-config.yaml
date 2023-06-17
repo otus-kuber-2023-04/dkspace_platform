@@ -5,8 +5,4 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-<<<<<<< Updated upstream
-  - 172.17.255.1-172.17.255.255 
-=======
   - 172.17.255.1-172.17.255.255
->>>>>>> Stashed changes
