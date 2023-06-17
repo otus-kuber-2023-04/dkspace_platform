@@ -5,11 +5,15 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
+  ingressClassName: nginx
   rules:
   - http:
       paths:
       - path: /web
+        pathType: Prefix
         backend:
-          serviceName: web-svc
-          servicePort: 8000
+          service:
+            name: web-svc
+            port:
+              number: 8000
 

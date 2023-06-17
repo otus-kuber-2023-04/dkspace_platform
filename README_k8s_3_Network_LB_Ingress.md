@@ -439,6 +439,12 @@ from 1.0.0 Minikube support kube-proxy in IPVS mode. Lets try to enable.
 Lets enable IPVS for kube-proxy , by changing ConfigMap (конфигурация
 Pod, хранящаяся в кластере)
 ```
+#chat: попробовал так
+minikube start --addons=metallb --extra-config kube-proxy.mode=ipvs --extra-config kube-proxy.ipvs.strictARP=true
+#ipvs, metallb завелся
+```
+
+```
 kubectl --namespace kube-system edit configmap/kube-proxy
 ```
 Или 
@@ -747,6 +753,9 @@ Chain KUBE-MARK-MASQ (2 references)
 kube-proxy периодически делает полную синхронизацию правил в своих цепочках)
 
 Как посмотреть конфигурацию IPVS? Ведь в ВМ нет утилиты ipvsadm ?
+Нужно в minikube ставить ipvsadm 
+ `sudo apt install ipvsadm`
+
 В ВМ выполним команду toolbox - в результате мы окажется в контейнере с Fedora
 Теперь установим ipvsadm : `dnf install -y ipvsadm && dnf clean all`
 
@@ -770,7 +779,18 @@ root@minikube:~#
 ```
 Выполним ipvsadm --list -n и среди прочих сервисов найдем
 наш:
-Теперь выйдем из контейнера toolbox и сделаем ping
+```
+ipvsadm --list -nIP Virtual Server version 1.2.1 (size=4096) 
+Prot LocalAddress:Port Scheduler Flags  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn 
+TCP  10.96.0.1:443 rr  -> 10.0.0.2:8443                Masq    1      2          0 
+TCP  10.96.0.10:53 rr  -> 10.244.0.2:53                Masq    1      0          0 
+TCP  10.96.0.10:9153 rr  -> 10.244.0.2:9153              Masq    1      0          0 
+TCP  10.110.105.129:443 rr  -> 10.244.0.7:9443              Masq    1      0          0 
+TCP  10.111.205.14:80 rr  -> 10.244.0.4:8000              Masq    1      0          0 
+  -> 10.244.0.5:8000              Masq    1      0          0  -> 10.244.0.6:8000              Masq    1      0          0 
+UDP  10.96.0.10:53 rr  -> 10.244.0.2:53                Masq    1      0  
+```
+Теперь выйдем из контейнера toolbox и сделаем ping (нет пинга)
 кластерного IP:
 $ ipvsadm --list -n
 TCP 10.106.18.171:80 rr
@@ -795,11 +815,10 @@ toolbox .
 
 ## Installation MetalLB
 
-MetalLB позволяет запустить внутри кластера L4-балансировщик,который будет принимать извне запросы к сервисам и раскидывать их между подами. Установка его проста:
+MetalLB позволяет запустить внутри кластера L4-балансировщик,который будет принимать извне запросы к сервисам и раскидывать их между подами. Установка его проста: https://metallb.universe.tf/installation/
+
 ```
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.3/manifests/namespace.yaml
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.3/manifests/metallb.yaml
-kubectl create secret generic -n metallb-system memberlist --fromliteral=secretkey="$(openssl rand -base64 128)"
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.10/config/manifests/metallb-native.yaml
 ```
 
 В продуктиве так делать не надо. Сначала стоит скачать файл и
@@ -807,39 +826,39 @@ kubectl create secret generic -n metallb-system memberlist --fromliteral=secretk
 
 
 ```
- kubectl --namespace metallb-system get all
-NAME                              READY   STATUS             RESTARTS   AGE
-pod/controller-5759df545c-p77mh   0/1     ImagePullBackOff   0          114s
-pod/speaker-9hvjj                 0/1     ImagePullBackOff   0          114s
+kubectl --namespace metallb-system get all
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/controller-5fd797fbf7-vxhgw   1/1     Running   0          96s
+pod/speaker-t4vkw                 1/1     Running   0          96s
 
-NAME                     DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR                 AGE
-daemonset.apps/speaker   1         1         0       1            0           beta.kubernetes.io/os=linux   114s
+NAME                      TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+service/webhook-service   ClusterIP   10.110.21.224   <none>        443/TCP   96s
+
+NAME                     DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR            AGE
+daemonset.apps/speaker   1         1         1       1            1           kubernetes.io/os=linux   96s
 
 NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
-deployment.apps/controller   0/1     1            0           114s
+deployment.apps/controller   1/1     1            1           96s
 
 NAME                                    DESIRED   CURRENT   READY   AGE
-replicaset.apps/controller-5759df545c   1         1         0       114s
-dmik@nmslab:~$
+replicaset.apps/controller-5fd797fbf7   1         1         1       96s
+
 
 ```
 
+https://metallb.universe.tf/configuration/
 Теперь настроим балансировщик с помощью ConfigMap
 
 metallb-config.yaml
 ```
-apiVersion: v1
-kind: ConfigMap
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
 metadata:
+  name: first-pool
   namespace: metallb-system
-  name: config
-data:
-  config: |
-    address-pools:
-    - name: default
-      protocol: layer2
-      addresses:
-      - 172.17.255.1-172.17.255.255
+spec:
+  addresses:
+  - 172.17.255.1-172.17.255.255 
 
 ```
 В конфигурации мы настраиваем:
@@ -847,29 +866,19 @@ data:
 Создаем пул адресов 172.17.255.1 - 172.17.255.255 - они будут
 назначаться сервисам с типом LoadBalancer
 ```
- kubectl apply -f metallb-config.yaml
+kubectl apply -f metallb-config.yaml
 configmap/config created
 ```
 
 ### MetalLB -Проверка конфигурации
-cp web-svc-cip.yaml web-svc-lb.yaml и
-откройте его в редакторе.
-Измените имя сервиса и его тип на LoadBalancer
+cp web-svc-cip.yaml web-svc-lb.yaml пропишите конфигурацию
 ```
 cat web-svc-lb.yaml
-apiVersion: v1
-kind: Service
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
 metadata:
-  name: web-svc-lb
-spec:
-  selector:
-    app: web
-  type: LoadBalancer
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 8000
-
+  name: example
+  namespace: metallb-system
 ```
 
 ```
@@ -880,9 +889,32 @@ service/web-svc-lb created
 Теперь посмотрите логи пода-контроллера MetalLB (подставьте
 правильное имя!)
 
-`kubectl --namespace metallb-system logs pod/controller-5759df545c`
+`kubectl --namespace metallb-system logs controller-5fd797fbf7-vxhgw| grep ipAll`
+```
+{"caller":"service.go:142","event":"ipAllocated","ip":["172.17.255.1"],"level":"info","msg":"IP address assigned by controller","ts":"2023-06-06T00:49:38Z"}
+```
+Обратите внимание на назначенный IP-адрес  ipAllocated","ip":["172.17.255.1"]
 
-Обратите внимание на назначенный IP-адрес 
+In case problem with Balanser (EXTERNAL-IP of EXTERNAL-IP from wrong subnet ) - delete controller :
+```
+ kubectl get pods --namespace metallb-system
+NAME                          READY   STATUS    RESTARTS      AGE
+controller-5fd797fbf7-bbtbp   1/1     Running   0             24m
+speaker-t4vkw                 1/1     Running   2 (34m ago)   11d
+```
+`kubectl delete pods controller-5fd797fbf7-vxhgw --namespace metallb-system`
+
+
+```
+kubectl get svc --all-namespaces
+NAMESPACE        NAME              TYPE           CLUSTER-IP      EXTERNAL-IP      PORT(S)                  AGE
+default          kubernetes        ClusterIP      10.96.0.1       <none>           443/TCP                  27h
+default          web-svc-cip       ClusterIP      10.111.205.14   <none>           80/TCP                   27h
+default          web-svc-lb        LoadBalancer   10.96.237.41    172.17.255.1   80:30222/TCP             25h
+kube-system      kube-dns          ClusterIP      10.96.0.10      <none>           53/UDP,53/TCP,9153/TCP   27h
+metallb-system   webhook-service   ClusterIP      10.110.21.224   <none>           443/TCP                  19m
+```
+
 (или посмотрите его в выводе `kubectl describe svc web-svc-lb` )
 
 ```
@@ -890,20 +922,28 @@ kubectl describe svc web-svc-lb
 Name:                     web-svc-lb
 Namespace:                default
 Labels:                   <none>
-Annotations:              <none>
+Annotations:              metallb.universe.tf/ip-allocated-from-pool: example
 Selector:                 app=web
 Type:                     LoadBalancer
 IP Family Policy:         SingleStack
 IP Families:              IPv4
-IP:                       10.106.206.86
-IPs:                      10.106.206.86
+IP:                       10.96.237.41
+IPs:                      10.96.237.41
+LoadBalancer Ingress:     172.17.255.1
 Port:                     <unset>  80/TCP
 TargetPort:               8000/TCP
-NodePort:                 <unset>  30156/TCP
-Endpoints:                10.244.0.18:8000,10.244.0.19:8000,10.244.0.21:8000
+NodePort:                 <unset>  30222/TCP
+Endpoints:                10.244.0.12:8000,10.244.0.13:8000,10.244.0.9:8000
 Session Affinity:         None
 External Traffic Policy:  Cluster
-Events:                   <none>
+Events:
+  Type     Reason            Age                From                Message
+  ----     ------            ----               ----                -------
+  Warning  AllocationFailed  25h (x2 over 25h)  metallb-controller  Failed to allocate IP for "default/web-svc-lb": no available IPs
+  Warning  AllocationFailed  20m (x2 over 20m)  metallb-controller  Failed to allocate IP for "default/web-svc-lb": no available IPs
+  Normal   IPAllocated       12m                metallb-controller  Assigned IP ["172.17.255.1"]
+  Normal   nodeAssigned      12m                metallb-speaker     announcing from node "minikube" with protocol "layer2"
+
 
 ```
 Если мы попробуем открыть URL
@@ -918,19 +958,43 @@ http://<our_LB_address>/index.html , то... ничего не выйдет.
 
 Найдите IP-адрес виртуалки с Minikube. Например так:
 ```
-minikube ssh
-Last login: Sun Jun  4 02:43:04 2023 from 10.1.1.129
+dmik@nmslab:~$ minikube ssh
+Last login: Sun Jun  4 22:00:45 2023 from 10.0.0.1
 docker@minikube:~$ ip addr show eth0
 9: eth0@if10: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default
-    link/ether 02:42:0a:01:01:82 brd ff:ff:ff:ff:ff:ff link-netnsid 0
-    inet 10.1.1.130/25 brd 10.1.1.255 scope global eth0
-
+    link/ether 02:42:0a:00:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 10.0.0.2/24 brd 10.0.0.255 scope global eth0
+       valid_lft forever preferred_lft forever
 ```
 или
 ```
  minikube ip
-10.1.1.130
+10.0.0.2
 ```
+```
+sudo route add -net 172.17.255.0/24 gw 10.0.0.2
+curl http://172.17.255.1/index.html                             <html>
+<head/>
+<body>
+<!-- IMAGE BEGINS HERE -->
+<font size="-3">
+<pre><font color=white>0111010011111011110010000111011000001110000110010011101000001100101011110010100111010001111101001011000001110110101110111001000110</font><br><font color=white>1001000000100011101100010111010111001011010111111001101101100100111111101101101001001111010111100111101010010011011010010100111110</font><br><font color=white>1001100000000010</font><font color=#fffdfc>1</font><font color=#fffcfb>001000</font><font color=#fefcfb>0001</font><font color=#fffcfb>010</font><font color=#fffdfd>0</font><font color=#fffefe>1</font><font color=#fffffe>1</font><font color=white>01111000101001011010111000100110110101011110101101011
+
+ping 172.17.255.1
+PING 172.17.255.1 (172.17.255.1) 56(84) bytes of data.
+From 10.0.0.2 icmp_seq=1 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=2 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=3 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=4 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=5 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=6 Destination Host Unreachable
+^C
+--- 172.17.255.1 ping statistics ---
+8 packets transmitted, 0 received, +6 errors, 100% packet loss, time 7457ms
+pipe 4
+
+```
+
 
 MetalLB | Проверка конфигурации
 Если пообновлять страничку с помощью Ctrl-F5 (т.е. игнорируя кэш),
@@ -944,6 +1008,53 @@ MetalLB | Проверка конфигурации
 Доступные алгоритмы балансировки описаны здесь и здесь
 https://github.com/kubernetes/kubernetes/blob/1cb3b5807ec37490b4582f22d991c043cc468195/pkg/proxy/apis/config/types.go#L185
 http://www.linuxvirtualserver.org/docs/scheduling.html
+
+
+```
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ kubectl get pods --all-namespaces
+NAMESPACE        NAME                               READY   STATUS    RESTARTS      AGE
+default          web-5948c498d7-h7pv2               1/1     Running   2 (32h ago)   12d
+default          web-5948c498d7-mmpr6               1/1     Running   2 (51m ago)   12d
+default          web-5948c498d7-pzx4g               1/1     Running   2 (51m ago)   12d
+kube-system      coredns-787d4945fb-9kgxc           1/1     Running   2 (51m ago)   12d
+kube-system      etcd-minikube                      1/1     Running   2 (32h ago)   12d
+kube-system      kube-apiserver-minikube            1/1     Running   2 (51m ago)   12d
+kube-system      kube-controller-manager-minikube   1/1     Running   2 (51m ago)   12d
+kube-system      kube-proxy-fqfx6                   1/1     Running   2 (32h ago)   12d
+kube-system      kube-scheduler-minikube            1/1     Running   2 (32h ago)   12d
+kube-system      storage-provisioner                1/1     Running   6 (14m ago)   12d
+metallb-system   controller-5fd797fbf7-bbtbp        1/1     Running   0             38m
+metallb-system   speaker-t4vkw                      1/1     Running   2 (48m ago)   11d
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ curl http://172.17.255.1/index.html  | grep web-
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 82999  100 82999    0     0  11.6M      0 --:--:-- --:--:-- --:--:-- 13.1M
+export HOSTNAME='web-5948c498d7-h7pv2'
+10.244.0.5      web-5948c498d7-h7pv2</pre>
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ curl http://172.17.255.1/index.html  | grep web-
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 82999  100 82999    0     0  34.0M      0 --:--:-- --:--:-- --:--:-- 79.1M
+export HOSTNAME='web-5948c498d7-pzx4g'
+10.244.0.4      web-5948c498d7-pzx4g</pre>
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ curl http://172.17.255.1/index.html  | grep web-
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 82999  100 82999    0     0  46.2M      0 --:--:-- --:--:-- --:--:-- 79.1M
+export HOSTNAME='web-5948c498d7-h7pv2'
+10.244.0.5      web-5948c498d7-h7pv2</pre>
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ curl http://172.17.255.1/index.html  | grep web-
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 82999  100 82999    0     0  8037k      0 --:--:-- --:--:-- --:--:-- 9005k
+export HOSTNAME='web-5948c498d7-pzx4g'
+10.244.0.4      web-5948c498d7-pzx4g</pre>
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$
+
+```
+
 
 
 ### Задание со ⭐️  DNS через MetalLB
@@ -1001,36 +1112,68 @@ ports:
 
 Теперь применим созданный манифест и посмотрим на IP-адрес,
 назначенный ему MetalLB
+
+```
+get svc --all-namespaces
+NAMESPACE        NAME                                 TYPE           CLUSTER-IP       EXTERNAL-IP    PORT(S)                      AGE
+default          kubernetes                           ClusterIP      10.96.0.1        <none>         443/TCP                      12d
+default          web-svc-cip                          ClusterIP      10.111.205.14    <none>         80/TCP                       12d
+default          web-svc-lb                           LoadBalancer   10.96.237.41     172.17.255.1   80:30222/TCP                 12d
+ingress-nginx    ingress-nginx                        LoadBalancer   10.105.198.238   172.17.255.2   80:32393/TCP,443:30857/TCP   26s
+ingress-nginx    ingress-nginx-controller             NodePort       10.98.176.145    <none>         80:31372/TCP,443:31271/TCP   3m47s
+ingress-nginx    ingress-nginx-controller-admission   ClusterIP      10.97.35.2       <none>         443/TCP                      3m47s
+kube-system      kube-dns                             ClusterIP      10.96.0.10       <none>         53/UDP,53/TCP,9153/TCP       12d
+metallb-system   webhook-service                      ClusterIP      10.110.21.224    <none>         443/TCP                      11d
+dmik@nmslab:~/dkspace_platform/kubernetes-networks$ kubectl --namespace metallb-system logs pod/controller-5fd797fbf7-bbtbp | grep Alloca
+{"caller":"service.go:142","event":"ipAllocated","ip":["172.17.255.2"],"level":"info","msg":"IP address assigned by controller","ts":"2023-06-17T17:51:24Z"}
+
+```
+
 Теперь можно сделать пинг на этот IP-адрес и даже curl
 Если видим страничку 404 от OpenResty (или Nginx) - значит работает!
 
 
 ```
-kubectl apply -f nginx-lb.yaml
-service/ingress-nginx created
+ping 172.17.255.2
+PING 172.17.255.2 (172.17.255.2) 56(84) bytes of data.
+From 10.0.0.2 icmp_seq=1 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=2 Destination Host Unreachable
+From 10.0.0.2 icmp_seq=3 Destination Host Unreachable
+^C
+--- 172.17.255.2 ping statistics ---
+4 packets transmitted, 0 received, +3 errors, 100% packet loss, time 3074ms
+pipe 4
+ curl 172.17.255.2
+<html>
+<head><title>404 Not Found</title></head>
+<body>
+<center><h1>404 Not Found</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
 
-kubectl get svc
-NAME          TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
-kubernetes    ClusterIP      10.96.0.1        <none>        443/TCP        4h19m
-web-svc-cip   ClusterIP      10.100.119.150   <none>        80/TCP         153m
-web-svc-lb    LoadBalancer   10.106.206.86    <pending>     80:30156/TCP   48m
-dmik@nmslab:~/dkspace_platform/kubernetes-networks$ minikube service list
-|----------------------|------------------------------------|--------------|-------------------------|
-|      NAMESPACE       |                NAME                | TARGET PORT  |           URL           |
-|----------------------|------------------------------------|--------------|-------------------------|
-| default              | kubernetes                         | No node port |                         |
-| default              | web-svc-cip                        | No node port |                         |
-| default              | web-svc-lb                         |           80 | http://10.1.1.130:30156 |
-| ingress-nginx        | ingress-nginx                      | http/80      | http://10.1.1.130:31545 |
-|                      |                                    | https/443    | http://10.1.1.130:31561 |
-| ingress-nginx        | ingress-nginx-controller           | http/80      | http://10.1.1.130:32189 |
-|                      |                                    | https/443    | http://10.1.1.130:30852 |
-| ingress-nginx        | ingress-nginx-controller-admission | No node port |                         |
-| kube-system          | kube-dns                           | No node port |                         |
-| kubernetes-dashboard | dashboard-metrics-scraper          | No node port |                         |
-| kubernetes-dashboard | kubernetes-dashboard               | No node port |                         |
-|----------------------|------------------------------------|--------------|-------------------------|
-dmik@nmslab:~/dkspace_platform/kubernetes-networks$
+ minikube service list
+|----------------|------------------------------------|--------------|-----------------------|
+|   NAMESPACE    |                NAME                | TARGET PORT  |          URL          |
+|----------------|------------------------------------|--------------|-----------------------|
+| default        | kubernetes                         | No node port |                       |
+| default        | web-svc-cip                        | No node port |                       |
+| default        | web-svc-lb                         |           80 | http://10.0.0.2:30222 |
+| ingress-nginx  | ingress-nginx                      | http/80      | http://10.0.0.2:32393 |
+|                |                                    | https/443    | http://10.0.0.2:30857 |
+| ingress-nginx  | ingress-nginx-controller           | http/80      | http://10.0.0.2:31372 |
+|                |                                    | https/443    | http://10.0.0.2:31271 |
+| ingress-nginx  | ingress-nginx-controller-admission | No node port |                       |
+| kube-system    | kube-dns                           | No node port |                       |
+| metallb-system | webhook-service                    | No node port |                       |
+|----------------|------------------------------------|--------------|-----------------------|
+
+ kubectl get svc
+NAME          TYPE           CLUSTER-IP      EXTERNAL-IP    PORT(S)        AGE
+kubernetes    ClusterIP      10.96.0.1       <none>         443/TCP        12d
+web-svc-cip   ClusterIP      10.111.205.14   <none>         80/TCP         12d
+web-svc-lb    LoadBalancer   10.96.237.41    172.17.255.1   80:30222/TCP   12d
+
 
 ```
 
@@ -1068,31 +1211,24 @@ kubectl apply -f web-svc-headless.yaml
 service/web-svc created
 ```
 Теперь примените полученный манифест и проверьте, что ClusterIP
-для сервиса web-svc действительно не назначен
+для сервиса web-svc действительно не назначен:
+` web-svc   ClusterIP      None`
+
 ```
- minikube service list
-|----------------------|------------------------------------|--------------|-------------------------|
-|      NAMESPACE       |                NAME                | TARGET PORT  |           URL           |
-|----------------------|------------------------------------|--------------|-------------------------|
-| default              | kubernetes                         | No node port |                         |
-| default              | web-svc                            | No node port |                         |
-| default              | web-svc-cip                        | No node port |                         |
-| default              | web-svc-lb                         |           80 | http://10.1.1.130:30156 |
-| ingress-nginx        | ingress-nginx                      | http/80      | http://10.1.1.130:31545 |
-|                      |                                    | https/443    | http://10.1.1.130:31561 |
-| ingress-nginx        | ingress-nginx-controller           | http/80      | http://10.1.1.130:32189 |
-|                      |                                    | https/443    | http://10.1.1.130:30852 |
-| ingress-nginx        | ingress-nginx-controller-admission | No node port |                         |
-| kube-system          | kube-dns                           | No node port |                         |
-| kubernetes-dashboard | dashboard-metrics-scraper          | No node port |                         |
-| kubernetes-dashboard | kubernetes-dashboard               | No node port |                         |
-|----------------------|------------------------------------|--------------|-------------------------|
-dmik@nmslab:~/dkspace_platform/kubernetes-networks$ kubectl get svc
-NAME          TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
-kubernetes    ClusterIP      10.96.0.1        <none>        443/TCP        4h27m
-web-svc       ClusterIP      None             <none>        80/TCP         57s
-web-svc-cip   ClusterIP      10.100.119.150   <none>        80/TCP         161m
-web-svc-lb    LoadBalancer   10.106.206.86    <pending>     80:30156/TCP   56m
+kubectl apply -f web-svc-headless.yaml
+service/web-svc created
+
+ get svc --all-namespaces
+NAMESPACE        NAME                                 TYPE           CLUSTER-IP       EXTERNAL-IP    PORT(S)                      AGE
+default          kubernetes                           ClusterIP      10.96.0.1        <none>         443/TCP                      12d
+default          web-svc                              ClusterIP      None             <none>         80/TCP                       64s
+default          web-svc-cip                          ClusterIP      10.111.205.14    <none>         80/TCP                       12d
+default          web-svc-lb                           LoadBalancer   10.96.237.41     172.17.255.1   80:30222/TCP                 12d
+ingress-nginx    ingress-nginx                        LoadBalancer   10.105.198.238   172.17.255.2   80:32393/TCP,443:30857/TCP   9m58s
+ingress-nginx    ingress-nginx-controller             NodePort       10.98.176.145    <none>         80:31372/TCP,443:31271/TCP   13m
+ingress-nginx    ingress-nginx-controller-admission   ClusterIP      10.97.35.2       <none>         443/TCP                      13m
+kube-system      kube-dns                             ClusterIP      10.96.0.10       <none>         53/UDP,53/TCP,9153/TCP       12d
+metallb-system   webhook-service                      ClusterIP      10.110.21.224    <none>         443/TCP                      11d
 ```
 
 ### Ingress Rules
@@ -1118,20 +1254,114 @@ spec:
           servicePort: 8000
 ```
 
+https://kubernetes.io/docs/concepts/services-networking/ingress/
+```
+cat web-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx-example
+  rules:
+  - http:
+      paths:
+      - path: /web
+        pathType: Prefix
+        backend:
+          service:
+            name: web-svc
+            port:
+              number: 8000
+
+```
+
 ```
 kubectl apply -f web-ingress.yaml
-Error from server (BadRequest): error when creating "web-ingress.yaml": Ingress in version "v1" cannot be handled as a Ingress: strict decoding error: unknown field "spec.rules[0].http.paths[0].backend.serviceName", unknown field "spec.rules[0].http.paths[0].backend.servicePort"
+ingress.networking.k8s.io/web created
+
 ```
 
 Примените манифест и проверьте, что корректно заполнены Address и Backends
 ```
 kubectl describe ingress/web
+Name:             web
+Labels:           <none>
+Namespace:        default
+Address:          10.0.0.2
+Ingress Class:    nginx
+Default backend:  <default>
+Rules:
+  Host        Path  Backends
+  ----        ----  --------
+  *
+              /web   web-svc:8000 (10.244.0.18:8000,10.244.0.19:8000,10.244.0.20:8000)
+Annotations:  nginx.ingress.kubernetes.io/rewrite-target: /
+Events:
+  Type    Reason  Age                From                      Message
+  ----    ------  ----               ----                      -------
+  Normal  Sync    80s (x2 over 91s)  nginx-ingress-controller  Scheduled for sync
+
+
+kubectl describe svc ingress-nginx -n ingress-nginx
+Name:                     ingress-nginx
+Namespace:                ingress-nginx
+Labels:                   app.kubernetes.io/name=ingress-nginx
+                          app.kubernetes.io/part-of=ingress-nginx
+Annotations:              metallb.universe.tf/ip-allocated-from-pool: first-pool
+Selector:                 app.kubernetes.io/component=controller,app.kubernetes.io/instance=ingress-nginx,app.kubernetes.io/name=ingress-nginx
+Type:                     LoadBalancer
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.105.198.238
+IPs:                      10.105.198.238
+LoadBalancer Ingress:     172.17.255.2
+Port:                     http  80/TCP
+TargetPort:               http/TCP
+NodePort:                 http  32393/TCP
+Endpoints:                10.244.0.25:80
+Port:                     https  443/TCP
+TargetPort:               https/TCP
+NodePort:                 https  30857/TCP
+Endpoints:                10.244.0.25:443
+Session Affinity:         None
+External Traffic Policy:  Local
+HealthCheck NodePort:     31081
+Events:
+  Type    Reason        Age                   From             Message
+  ----    ------        ----                  ----             -------
+  Normal  nodeAssigned  10m (x17 over 3h52m)  metallb-speaker  announcing from node "minikube" with protocol "layer2"
+
+
+kubectl get svc --all-namespaces
+NAMESPACE        NAME                                 TYPE           CLUSTER-IP       EXTERNAL-IP    PORT(S)                      AGE
+default          kubernetes                           ClusterIP      10.96.0.1        <none>         443/TCP                      12d
+default          web-svc                              ClusterIP      None             <none>         80/TCP                       67m
+default          web-svc-cip                          ClusterIP      10.111.205.14    <none>         80/TCP                       12d
+default          web-svc-lb                           LoadBalancer   10.96.237.41     172.17.255.1   80:30222/TCP                 12d
+ingress-nginx    ingress-nginx                        LoadBalancer   10.105.198.238   172.17.255.2   80:32393/TCP,443:30857/TCP   76m
+ingress-nginx    ingress-nginx-controller             NodePort       10.98.176.145    <none>         80:31372/TCP,443:31271/TCP   79m
+ingress-nginx    ingress-nginx-controller-admission   ClusterIP      10.97.35.2       <none>         443/TCP                      79m
+kube-system      kube-dns                             ClusterIP      10.96.0.10       <none>         53/UDP,53/TCP,9153/TCP       12d
+metallb-system   webhook-service                      ClusterIP      10.110.21.224    <none>         443/TCP                      11d
 ```
 
 Теперь можно проверить, что страничка доступна в браузере
 ( http://<LB_IP>/web/index.html )
 Обратите внимание, что обращения к странице тоже балансируются
 между Podами. Только сейчас это происходит средствами nginx, а не IPVS
+
+```
+curl http://172.17.255.2/web/index.html
+<html>
+<head/>
+<body>
+<!-- IMAGE BEGINS HERE -->
+<font size="-3">
+<pre><font color=white>0111010011111011110010000111011000001110000110010011101000001100101011110010100111010001111101001011000001110110101110111001000110</font><br><font color=white>1001000000100011101100010111010111001011010111111001101101100100111111101101101001001111010111100111101010010011011010010100111110</font><br><font color=white>1001100000000010</font>
+```
 
 ## Задания со ⭐️ Ingress для Dashboard
 Добавьте доступ к kubernetes-dashboard через наш Ingress-прокси:
