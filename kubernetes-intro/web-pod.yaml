@@ -8,12 +8,19 @@ spec:  # Описание Pod
   containers: # Описание контейнеров внутри Pod
   - name: nginx  # Название контейнера
     image: dmikos4/web:testimg  # Образ из которого создается контейнер
+    readinessProbe: # Добавим проверку готовности
+      httpGet: # веб-сервера отдавать
+        path: /index.html # контент
+        port: 80
+    livenessProbe:
+      tcpSocket: { port: 8000 }
     volumeMounts: #У контейнера и у init контейнера должны быть описаны volumeMounts
     - name: app
       mountPath: /app
   initContainers:
   - name: init-web
-    image: busybox:latest
+#    image: busybox:latest
+    image: dmikos4/web:testimg
     command: ['sh', '-c', 'wget -O- https://tinyurl.com/otus-k8s-intro | sh']
     volumeMounts: #У контейнера и у init контейнера должны быть описаны volumeMounts
     - name: app
